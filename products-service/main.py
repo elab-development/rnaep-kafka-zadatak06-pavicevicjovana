@@ -3,6 +3,7 @@ from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
 from contextlib import asynccontextmanager
 from typing import List
 from models import Product
+from datetime import datetime, timezone
 import asyncio, json
 
 producer = AIOKafkaProducer(bootstrap_servers='kafka:9092')
@@ -37,8 +38,23 @@ async def consume(consumer: AIOKafkaConsumer):
         async for msg in consumer:
             order = json.loads(msg.value.decode('utf-8'))
             product = products_db.get(order['product_id'])
-            
-            if product and product.quantity >= order['quantity']:
+            timestamp = datetime.now(timezone.utc).isoformat()
+
+            if product is None:
+                await producer.send_and_wait("product_not_found_events", json.dumps({
+                    "order_id": order['id'],
+                    "product_id": order['product_id'],
+                    "timestamp": timestamp,
+                    "error_reason": "Proizvod ne postoji u katalogu"
+                }).encode('utf-8'))
+            elif product.quantity < order['quantity']:
+                await producer.send_and_wait("out_of_stock_events", json.dumps({
+                    "order_id": order['id'],
+                    "product_id": order['product_id'],
+                    "timestamp": timestamp,
+                    "error_reason": "Nedovoljna količina na stanju"
+                }).encode('utf-8'))
+            else:
                 product.quantity -= order['quantity']
                 await producer.send_and_wait("order-confirmed", json.dumps({
                     "order_id": order['id'],
